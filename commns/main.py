@@ -12,7 +12,7 @@ from typing import List
 class AzureManager:
     def __init__(self, input_blob_account_url: str, input_queue_account_url: str, input_container_name: str, 
              input_queue_name: str, output_blob_account_url: str, output_queue_account_url: str, 
-             output_container_name: str, output_queue_name: str, output_dir: str, max_retries: int = 3):
+             output_container_name: str, output_queue_name: str, job_dir: str, output_dir:str, max_retries: int = 3):
 
         """
         Initialize the AzureManager.
@@ -39,6 +39,7 @@ class AzureManager:
         self.output_container_name = output_container_name
         self.output_queue_name = output_queue_name
 
+        self.job_dir = job_dir
         self.output_dir = output_dir
         self.max_retries = max_retries
 
@@ -83,7 +84,7 @@ class AzureManager:
             if not target_id or not img_paths:
                 return False, "Invalid message format: missing id_group or img_paths"
             
-            target_folder = os.path.join(self.output_dir, target_id)
+            target_folder = os.path.join(self.job_dir, target_id)
             os.makedirs(target_folder, exist_ok=True)
             
             download_tasks = []
@@ -134,10 +135,9 @@ class AzureManager:
             if success:
                 # Upload the processed images to the output blob storage
                 target_folder = content
-                
-                # CALL THE DEEP LEARNING MODEL HERE TO PROCESS THE IMAGES
-                #result = call_deep_learning_model(target_folder)
-                #return True, target_folder    
+                output_folder = os.path.join(self.output_dir, os.path.basename(target_folder))
+            
+                return True, output_folder    
             
             return False, content
         
@@ -368,7 +368,7 @@ async def main():
         output_queue_account_url="https://outputstorage.queue.core.windows.net",
         output_container_name="outputcontainer",
         output_queue_name="outputqueue",
-        output_dir="processed_images",
+        job_dir="processed_images",
         max_retries=3
     )
     
