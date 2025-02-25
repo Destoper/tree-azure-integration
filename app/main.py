@@ -160,7 +160,8 @@ class AzureManager:
         """
         try:
             # Create a blob client using the blob URL
-            blob_client = self.input_container_client.from_blob_url(blob_url, credential=self.credential)
+            blob_name = blob_url.split('/')[-1]
+            blob_client = self.input_container_client.get_blob_client(blob_name)
             
             # Ensure the directory exists
             os.makedirs(os.path.dirname(destination_path), exist_ok=True)
@@ -310,18 +311,18 @@ class AzureManager:
                     current_retries = self.retry_tracker.get(message_id, 0)
 
                     print(f"Processing message ID: {message_id} (Attempt {current_retries + 1}/{self.max_retries})")
-
+                    print("AQUI 0")
                     # Process the message
                     success, content = await self.process_job(message.content)
 
                     if success:
                         # Upload the processed images to the output blob storage
-                        self.upload_to_blob_storage(content)
+                        await self.upload_to_blob_storage(content)
                         # Send the message to the output queue
-                        self.send_message_to_output_queue(content)
+                        await self.send_message_to_output_queue(content)
 
                         # Delete the message from the queue
-                        self.queue_client.delete_message(message)
+                        self.input_queue_client.delete_message(message)
                         print(f"Successfully processed and deleted message ID: {message_id}")
 
                         # Remove from retry tracker if it was there
@@ -361,7 +362,6 @@ class AzureManager:
 # Example usage
 async def main():
     # Configuration
-    print(Config.I_BLOB_ACCOUNT_URL)
     processor = AzureManager(
         input_blob_account_url= Config.I_BLOB_ACCOUNT_URL,
         input_queue_account_url= Config.I_QUEUE_ACCOUNT_URL,
@@ -371,8 +371,8 @@ async def main():
         output_queue_account_url= Config.O_QUEUE_ACCOUNT_URL,
         output_container_name= Config.O_CONTAINER_NAME,
         output_queue_name= Config.O_QUEUE_NAME,
-        job_dir="jobs",
-        output_dir="finished_jobs",
+        job_dir="app/jobs",
+        output_dir="app/finished_jobs",
         max_retries=3
     )
     
