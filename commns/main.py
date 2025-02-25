@@ -299,10 +299,10 @@ class AzureManager:
             
             while True:
                 # Get messages from the queue (adjust max_messages as needed)
-                messages = self.queue_client.receive_messages(max_messages=5)
+                message = self.queue_client.receive_messages(max_messages=1)
                 
                 message_processed = False
-                for message in messages:
+                if message:
                     message_processed = True
                     message_id = message.id
                     
