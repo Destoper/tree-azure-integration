@@ -11,6 +11,7 @@ from typing import List
 from app.config.config import Config
 
 class AzureManager:
+ 
     def __init__(self, input_blob_account_url: str, input_queue_account_url: str, input_container_name: str, 
              input_queue_name: str, output_blob_account_url: str, output_queue_account_url: str, 
              output_container_name: str, output_queue_name: str, job_dir: str, output_dir:str, max_retries: int = 3):
@@ -131,13 +132,22 @@ class AzureManager:
             tuple: (success_flag, error_message)
         """
         try:
+            content = "Null"
             success, content = await self.process_queue_message(message_content)
             
             if success:
-                # Upload the processed images to the output blob storage
+                # return the output folder path to be uploaded to blob storage
                 target_folder = content
                 output_folder = os.path.join(self.output_dir, os.path.basename(target_folder))
-            
+
+                try:
+                    # call the ML algorithm
+                    pass
+                except Exception as e:
+                    error_msg = f"Error on the ML algorithm: {str(e)}"
+                    print(error_msg)
+                    return False, error_msg
+
                 return True, output_folder    
             
             return False, content
@@ -194,16 +204,16 @@ class AzureManager:
             
             # Add error information
             dead_letter_message = {
-                "original_message": message_data,
                 "error": error_message,
+                "original_message": message_data,
                 "failed_at": datetime.now().isoformat()
             }
             
-            # Send to dead letter queue
+            # Send to error message to queue
             self.output_queue_client.send_message(json.dumps(dead_letter_message))
             
-            target_id = message_data.get("id_group", "unknown")
-            print(f"Sent message for target {target_id} to dead letter queue after {retry_count} retries")
+            target_id = message_data.get("TargetId", "unknown")
+            print(f"Sent error message for target {target_id} to queue after {retry_count} retries")
             return True
         except Exception as e:
             print(f"Error sending to dead letter queue: {str(e)}")
@@ -299,20 +309,18 @@ class AzureManager:
             print(f"Starting to process messages from queue: {self.input_queue_name}")
 
             while True:
-                # Get messages from the queue (adjust max_messages as needed)
+                # Get messages from the queue
                 messages = self.input_queue_client.receive_messages()
 
                 message_processed = False
                 for message in messages:  # Iterate over received messages
                     message_processed = True
                     message_id = message.id
+                    pop_receipt = message.pop_receipt
 
-                    # Get the current retry count for this message
                     current_retries = self.retry_tracker.get(message_id, 0)
 
                     print(f"Processing message ID: {message_id} (Attempt {current_retries + 1}/{self.max_retries})")
-                    print("AQUI 0")
-                    # Process the message
                     success, content = await self.process_job(message.content)
 
                     if success:
@@ -332,24 +340,32 @@ class AzureManager:
                         # Update retry count
                         self.retry_tracker[message_id] = current_retries + 1
 
+                        # After error, make message immediately visible again
+                        response = self.input_queue_client.update_message(
+                            message.id, 
+                            message.pop_receipt,
+                            visibility_timeout=0
+                        )
+                        pop_receipt = response.pop_receipt
+
                         # Check if we've reached max retries
                         if self.retry_tracker[message_id] >= self.max_retries:
                             # Send to dead letter queue
                             await self.send_error(
-                                message.content, 
-                                content, 
+                                message.content, #FIXME
+                                content,
                                 self.retry_tracker[message_id]
                             )
 
                             # Delete from original queue
-                            self.queue_client.delete_message(message)
+                            self.input_queue_client.delete_message(message_id, pop_receipt)
 
                             # Remove from retry tracker
                             del self.retry_tracker[message_id]
                         else:
                             print(f"Processing failed for message ID: {message_id}, will retry later (Attempt {self.retry_tracker[message_id]}/{self.max_retries})")
 
-                # If no messages were processed, wait before polling again
+                # if no remaining messages, send the end flag
                 if not message_processed:
                     print(f"No messages found... Sending the end flag")
                     await self.send_end_flag()
