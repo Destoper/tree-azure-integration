@@ -3,11 +3,12 @@ import json
 import asyncio
 from datetime import datetime
 from azure.storage.queue import QueueClient
-from azure.storage.blob import BlobClient
-from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from typing import List
 
+from app.config.config import Config
 
 class AzureManager:
     def __init__(self, input_blob_account_url: str, input_queue_account_url: str, input_container_name: str, 
@@ -54,11 +55,11 @@ class AzureManager:
                                                 credential=self.credential)
         
         # Initialize blob clients
-        self.input_blob_client = BlobClient(account_url=self.input_blob_account_url, container_name=self.input_container_name,
-                                            credential=self.credential)
+        self.input_blob_client = BlobServiceClient(account_url=self.input_blob_account_url, credential=self.credential)
+        self.input_container_client = self.input_blob_client.get_container_client(self.input_container_name)
         
-        self.output_blob_client = BlobClient(account_url=self.output_blob_account_url, container_name=self.output_container_name,
-                                            credential=self.credential)
+        self.output_blob_client = BlobServiceClient(account_url=self.output_blob_account_url, credential=self.credential)
+        self.output_container_client = self.output_blob_client.get_container_client(self.output_container_name)
         
         
         # Dictionary to track message retry counts (message_id: retry_count)
@@ -159,7 +160,7 @@ class AzureManager:
         """
         try:
             # Create a blob client using the blob URL
-            blob_client = BlobClient.from_blob_url(blob_url, credential=self.credential)
+            blob_client = self.input_container_client.from_blob_url(blob_url, credential=self.credential)
             
             # Ensure the directory exists
             os.makedirs(os.path.dirname(destination_path), exist_ok=True)
@@ -216,11 +217,11 @@ class AzureManager:
         """
         try:
             # Verify input blob container
-            self.input_blob_client.get_container_properties()
+            self.input_container_client.get_container_properties()
             print(f"Verified input container: {self.input_container_name}")
             
             # Verify output blob container
-            self.output_blob_client.get_container_properties()
+            self.output_container_client.get_container_properties()
             print(f"Verified output container: {self.output_container_name}")
             
             # Verify input queue
@@ -290,47 +291,46 @@ class AzureManager:
     async def process_queue(self):
         """
         Main processing loop to poll the queue and process messages.
-        
         """
         try:
             await self.verify_azure_resources()
-            
+
             print(f"Starting to process messages from queue: {self.input_queue_name}")
-            
+
             while True:
                 # Get messages from the queue (adjust max_messages as needed)
-                message = self.queue_client.receive_messages(max_messages=1)
-                
+                messages = self.input_queue_client.receive_messages()
+
                 message_processed = False
-                if message:
+                for message in messages:  # Iterate over received messages
                     message_processed = True
                     message_id = message.id
-                    
+
                     # Get the current retry count for this message
                     current_retries = self.retry_tracker.get(message_id, 0)
-                    
+
                     print(f"Processing message ID: {message_id} (Attempt {current_retries + 1}/{self.max_retries})")
-                    
+
                     # Process the message
                     success, content = await self.process_job(message.content)
-                    
+
                     if success:
-                        # upload the processed images to the output blob storage
+                        # Upload the processed images to the output blob storage
                         self.upload_to_blob_storage(content)
-                        # setup and send the message to the output queue
+                        # Send the message to the output queue
                         self.send_message_to_output_queue(content)
 
-                        #delete the message from the queue
+                        # Delete the message from the queue
                         self.queue_client.delete_message(message)
                         print(f"Successfully processed and deleted message ID: {message_id}")
-                        
+
                         # Remove from retry tracker if it was there
                         if message_id in self.retry_tracker:
                             del self.retry_tracker[message_id]
                     else:
                         # Update retry count
                         self.retry_tracker[message_id] = current_retries + 1
-                        
+
                         # Check if we've reached max retries
                         if self.retry_tracker[message_id] >= self.max_retries:
                             # Send to dead letter queue
@@ -339,36 +339,40 @@ class AzureManager:
                                 content, 
                                 self.retry_tracker[message_id]
                             )
-                            
+
                             # Delete from original queue
                             self.queue_client.delete_message(message)
-                            
+
                             # Remove from retry tracker
                             del self.retry_tracker[message_id]
                         else:
                             print(f"Processing failed for message ID: {message_id}, will retry later (Attempt {self.retry_tracker[message_id]}/{self.max_retries})")
-                
+
                 # If no messages were processed, wait before polling again
                 if not message_processed:
                     print(f"No messages found... Sending the end flag")
                     await self.send_end_flag()
-                    
+                    break
+
         except Exception as e:
             print(f"Error in main process: {str(e)}")
+
 
 # Example usage
 async def main():
     # Configuration
+    print(Config.I_BLOB_ACCOUNT_URL)
     processor = AzureManager(
-        input_blob_account_url="https://inputstorage.blob.core.windows.net",
-        input_queue_account_url="https://inputstorage.queue.core.windows.net",
-        input_container_name="inputcontainer",
-        input_queue_name="inputqueue",
-        output_blob_account_url="https://outputstorage.blob.core.windows.net",
-        output_queue_account_url="https://outputstorage.queue.core.windows.net",
-        output_container_name="outputcontainer",
-        output_queue_name="outputqueue",
-        job_dir="processed_images",
+        input_blob_account_url= Config.I_BLOB_ACCOUNT_URL,
+        input_queue_account_url= Config.I_QUEUE_ACCOUNT_URL,
+        input_container_name= Config.I_CONTAINER_NAME,
+        input_queue_name= Config.I_QUEUE_NAME,
+        output_blob_account_url= Config.O_BLOB_ACCOUNT_URL,
+        output_queue_account_url= Config.O_QUEUE_ACCOUNT_URL,
+        output_container_name= Config.O_CONTAINER_NAME,
+        output_queue_name= Config.O_QUEUE_NAME,
+        job_dir="jobs",
+        output_dir="finished_jobs",
         max_retries=3
     )
     
