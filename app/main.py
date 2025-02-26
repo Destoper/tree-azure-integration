@@ -519,10 +519,10 @@ async def main():
     try:
         # Configuration
         processor = AzureManager(
-            input_blob_conn_str=Config.STORAGE_CONNECTION_STRING,
+            input_blob_conn_str=Config.I_CONNECTION_STRING,
             input_container_name=Config.I_CONTAINER_NAME,
             input_queue_name=Config.I_QUEUE_NAME,
-            output_blob_conn_str=Config.STORAGE_CONNECTION_STRING,
+            output_blob_conn_str=Config.O_CONNECTION_STRING,
             output_container_name=Config.O_CONTAINER_NAME,
             output_queue_name=Config.O_QUEUE_NAME,
             job_dir=Config.JOB_DIR,
