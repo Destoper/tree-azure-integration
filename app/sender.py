@@ -7,9 +7,9 @@ from azure.storage.queue import QueueClient
 from azure.identity import DefaultAzureCredential
 
 # Constants
-ACCOUNT_URL:str = "https://treeivision.blob.core.windows.net"
-QUEUE_ACCOUNT_URL:str = "https://treeivision.queue.core.windows.net"
-CONTAINER_NAME:str = "imgstree"
+ACCOUNT_URL:str = "https://treevision.blob.core.windows.net"
+QUEUE_ACCOUNT_URL:str = "https://treevision.queue.core.windows.net"
+CONTAINER_NAME:str = "input-images"
 QUEUE_NAME:str = "input"
 FOLDER_PATH:str = "app/to_send"  # Path to the folder containing the images
 group_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
