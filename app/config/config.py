@@ -18,3 +18,10 @@ class Config:
     O_QUEUE_ACCOUNT_URL = os.getenv("O_QUEUE_ACCOUNT_URL")
     O_CONTAINER_NAME = os.getenv("O_CONTAINER_NAME")
     O_QUEUE_NAME = os.getenv("O_QUEUE_NAME")
+
+    # path to the local folders
+    JOB_DIR = os.getenv("JOB_DIR")
+    OUTPUT_DIR = os.getenv("OUTPUT_DIR")
+
+    # max entries
+    MAX_ENTRIES = int(os.getenv("MAX_ENTRIES"))
