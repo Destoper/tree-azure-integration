@@ -10,11 +10,11 @@ from config.config import Config
 STORAGE_CONNECTION_STRING = Config.I_CONNECTION_STRING
 
 # Constants
-CONTAINER_NAME = "imgstree"
-QUEUE_NAME = "input"
-FOLDER_PATH = "app/to_send"
-
-# Generate random group ID
+ACCOUNT_URL:str = "https://treevision.blob.core.windows.net"
+QUEUE_ACCOUNT_URL:str = "https://treevision.queue.core.windows.net"
+CONTAINER_NAME:str = "input-images"
+QUEUE_NAME:str = "input"
+FOLDER_PATH:str = "app/to_send"  # Path to the folder containing the images
 group_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 # Create clients using connection string

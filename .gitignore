@@ -4,3 +4,6 @@ lib
 lib64
 pyvenv.cfg
 __pycache__
+app/to_send
+app/finished_jobs
+app/jobs
