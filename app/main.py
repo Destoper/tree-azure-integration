@@ -3,7 +3,7 @@ import json
 import asyncio
 import logging
 from datetime import datetime
-from azure.storage.queue import QueueClient
+from azure.storage.queue import QueueServiceClient
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
@@ -24,19 +24,18 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 class AzureManager:
     """Manages Azure blob and queue operations for processing jobs."""
  
-    def __init__(self, input_blob_account_url: str, input_queue_account_url: str, input_container_name: str, 
-             input_queue_name: str, output_blob_account_url: str, output_queue_account_url: str, 
-             output_container_name: str, output_queue_name: str, job_dir: str, output_dir: str, max_retries: int = 3):
+    def __init__(self, input_blob_conn_str: str, input_container_name: str, 
+             input_queue_name: str, output_blob_conn_str: str, 
+             output_container_name: str, output_queue_name: str, 
+             job_dir: str, output_dir: str, max_retries: int = 3):
         """
-        Initialize the AzureManager.
+        Initialize the AzureManager with connection strings.
         
         Args:
-            input_blob_account_url (str): URL of the input blob storage account
-            input_queue_account_url (str): URL of the input queue storage account
+            input_blob_conn_str (str): Connection string for input blob/queue storage account
             input_container_name (str): Name of the input blob container
             input_queue_name (str): Name of the input queue
-            output_blob_account_url (str): URL of the output blob storage account
-            output_queue_account_url (str): URL of the output queue storage account
+            output_blob_conn_str (str): Connection string for output blob/queue storage account
             output_container_name (str): Name of the output blob container
             output_queue_name (str): Name of the output queue
             job_dir (str): Local directory to save downloaded images
@@ -44,14 +43,12 @@ class AzureManager:
             max_retries (int): Maximum number of retries for failed messages
         """
         # Input storage configuration
-        self.input_blob_account_url = input_blob_account_url
-        self.input_queue_account_url = input_queue_account_url
+        self.input_blob_conn_str = input_blob_conn_str
         self.input_container_name = input_container_name
         self.input_queue_name = input_queue_name
 
-        # Output storage configuration
-        self.output_blob_account_url = output_blob_account_url
-        self.output_queue_account_url = output_queue_account_url
+        # Output storage configuration  
+        self.output_blob_conn_str = output_blob_conn_str
         self.output_container_name = output_container_name
         self.output_queue_name = output_queue_name
 
@@ -61,44 +58,30 @@ class AzureManager:
 
         os.makedirs(self.job_dir, exist_ok=True)
         os.makedirs(self.output_dir, exist_ok=True)
-
-        self.credential = DefaultAzureCredential()
         
         # Initialize clients
         self._initialize_clients()
         
         # Dictionary to track message retry counts (message_id: retry_count)
         self.retry_tracker: Dict[str, int] = {}
-    
+
     def _initialize_clients(self) -> None:
-        """Initialize Azure queue and blob clients."""
+        """Initialize Azure queue and blob clients using connection strings."""
         try:
             # Initialize queue clients
-            self.input_queue_client = QueueClient(
-                account_url=self.input_queue_account_url, 
-                queue_name=self.input_queue_name,
-                credential=self.credential
-            ) 
+            input_queue_service = QueueServiceClient.from_connection_string(self.input_blob_conn_str)
+            self.input_queue_client = input_queue_service.get_queue_client(self.input_queue_name)
             
-            self.output_queue_client = QueueClient(
-                account_url=self.output_queue_account_url, 
-                queue_name=self.output_queue_name,
-                credential=self.credential
-            )
+            output_queue_service = QueueServiceClient.from_connection_string(self.output_blob_conn_str)
+            self.output_queue_client = output_queue_service.get_queue_client(self.output_queue_name)
             
             # Initialize blob clients
-            self.input_blob_client = BlobServiceClient(
-                account_url=self.input_blob_account_url, 
-                credential=self.credential
-            )
+            self.input_blob_client = BlobServiceClient.from_connection_string(self.input_blob_conn_str)
             self.input_container_client = self.input_blob_client.get_container_client(
                 self.input_container_name
             )
             
-            self.output_blob_client = BlobServiceClient(
-                account_url=self.output_blob_account_url, 
-                credential=self.credential
-            )
+            self.output_blob_client = BlobServiceClient.from_connection_string(self.output_blob_conn_str)
             self.output_container_client = self.output_blob_client.get_container_client(
                 self.output_container_name
             )
@@ -536,12 +519,10 @@ async def main():
     try:
         # Configuration
         processor = AzureManager(
-            input_blob_account_url=Config.I_BLOB_ACCOUNT_URL,
-            input_queue_account_url=Config.I_QUEUE_ACCOUNT_URL,
+            input_blob_conn_str=Config.STORAGE_CONNECTION_STRING,
             input_container_name=Config.I_CONTAINER_NAME,
             input_queue_name=Config.I_QUEUE_NAME,
-            output_blob_account_url=Config.O_BLOB_ACCOUNT_URL,
-            output_queue_account_url=Config.O_QUEUE_ACCOUNT_URL,
+            output_blob_conn_str=Config.STORAGE_CONNECTION_STRING,
             output_container_name=Config.O_CONTAINER_NAME,
             output_queue_name=Config.O_QUEUE_NAME,
             job_dir=Config.JOB_DIR,

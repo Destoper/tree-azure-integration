@@ -7,6 +7,9 @@ load_dotenv(dotenv_path="app/.env")
 
 @dataclass
 class Config:
+
+    STORAGE_CONNECTION_STRING = 
+
     # input storage account
     I_BLOB_ACCOUNT_URL = os.getenv("I_BLOB_ACCOUNT_URL")
     I_QUEUE_ACCOUNT_URL = os.getenv("I_QUEUE_ACCOUNT_URL")
