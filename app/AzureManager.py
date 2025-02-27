@@ -11,6 +11,8 @@ from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 
+from constants import Constants
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -26,7 +28,7 @@ class AzureManager:
     def __init__(self, input_blob_conn_str: str, input_container_name: str, 
              input_queue_name: str, output_blob_conn_str: str, 
              output_container_name: str, output_queue_name: str, 
-             job_dir: str, output_dir: str, max_retries: int = 3):
+             job_dir: str, output_dir: str, max_retries: int = Constants.MAX_DEFAULT_RETRIES):
         """
         Initialize the AzureManager with connection strings.
         
@@ -103,11 +105,11 @@ class AzureManager:
         if not isinstance(message_data, dict):
             return False, "Message data is not a dictionary"
             
-        target_id = message_data.get("TargetId")
+        target_id = message_data.get(Constants.KEY_TARGET_ID)
         if not target_id or not isinstance(target_id, str):
             return False, "Invalid or missing TargetId"
             
-        img_paths = message_data.get("Photos")
+        img_paths = message_data.get(Constants.KEY_PHOTOS)
         if not img_paths or not isinstance(img_paths, list) or len(img_paths) == 0:
             return False, "Invalid or missing Photos list"
             
@@ -138,17 +140,16 @@ class AzureManager:
             if not is_valid:
                 return False, error_message
             
-            target_id: str = message_data.get("TargetId")
-            img_paths: List[str] = message_data.get("Photos", [])
+            target_id: str = message_data.get(Constants.KEY_TARGET_ID)
+            img_paths: List[str] = message_data.get(Constants.KEY_PHOTOS, [])
             
             target_folder = os.path.join(self.job_dir, target_id)
             os.makedirs(target_folder, exist_ok=True)
             
-
             download_tasks = []
             for i, img_url in enumerate(img_paths):
                 # Extract filename from URL or create a sequential filename
-                filename = os.path.basename(img_url.split('?')[0]) or f"image_{i}.jpg"
+                filename = os.path.basename(img_url.split('?')[0]) or Constants.IMAGE_FILENAME_TEMPLATE.format(i)
                 destination_path = os.path.join(target_folder, filename)
                 download_tasks.append(self.download_image(img_url, destination_path))
 
@@ -201,7 +202,7 @@ class AzureManager:
                     for filename in os.listdir(target_folder):
                         source_path = os.path.join(target_folder, filename)
                         if os.path.isfile(source_path):
-                            dest_path = os.path.join(output_folder, f"processed_{filename}")
+                            dest_path = os.path.join(output_folder, f"{Constants.PROCESSED_FILENAME_PREFIX}{filename}")
                             async with aiofiles.open(source_path, 'rb') as src_file:
                                 content = await src_file.read()
                                 async with aiofiles.open(dest_path, 'wb') as dest_file:
@@ -279,18 +280,18 @@ class AzureManager:
             # Parse the original message if it's valid JSON
             try:
                 message_data = json.loads(message_content)
-                target_id = message_data.get("TargetId", "unknown")
+                target_id = message_data.get(Constants.KEY_TARGET_ID, Constants.DEFAULT_TARGET_ID)
             except (json.JSONDecodeError, TypeError):
                 # If the message is not valid JSON, use it as-is
                 message_data = message_content
-                target_id = "unknown"
+                target_id = Constants.DEFAULT_TARGET_ID
             
             # Create the dead letter message
             dead_letter_message = {
-                "error": error_message,
-                "original_message": message_data,
-                "retry_count": retry_count,
-                "failed_at": datetime.now().isoformat()
+                Constants.KEY_ERROR: error_message,
+                Constants.KEY_ORIGINAL_MESSAGE: message_data,
+                Constants.KEY_RETRY_COUNT: retry_count,
+                Constants.KEY_FAILED_AT: datetime.now().isoformat()
             }
             
             # Send to error message to queue
@@ -343,8 +344,8 @@ class AzureManager:
         """
         try:
             end_message = {
-                "end_of_processing": True,
-                "timestamp": datetime.now().isoformat()
+                Constants.KEY_END_OF_PROCESSING: True,
+                Constants.KEY_TIMESTAMP: datetime.now().isoformat()
             }
             
             self.output_queue_client.send_message(json.dumps(end_message))
@@ -354,79 +355,71 @@ class AzureManager:
             logger.error(f"Error sending end flag: {str(e)}", exc_info=True)
             return False
 
-    async def upload_to_blob_storage(self, target_folder: str) -> bool:
+    async def upload_to_blob_storage(self, target_folder: str) -> Tuple[bool, Optional[str]]:
         """
-        Upload the processed images to the output blob storage.
+        Upload the scene.zip file to the output blob storage, renamed to scene_<TargetId>.zip.
         
         Args:
-            target_folder (str): Local directory containing processed images
+            target_folder (str): Local directory containing processed files
             
         Returns:
-            bool: Success flag
+            Tuple[bool, Optional[str]]: (success_flag, uploaded_blob_url)
         """
         if not os.path.exists(target_folder):
             logger.error(f"Target folder does not exist: {target_folder}")
-            return False
+            return False, None
             
         try:
-            #TODO: INTREGRATION 
-            upload_tasks = []
-            upload_results = []
+            target_id = os.path.basename(target_folder)
+            scene_zip_path = os.path.join(target_folder, Constants.SCENE_ZIP_FILENAME)
             
-            for root, _, files in os.walk(target_folder):
-                for file in files:
-                    local_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(local_path, target_folder)
-                    blob_name = os.path.join(os.path.basename(target_folder), relative_path)
-                    
-                    # Get blob client
-                    blob_client = self.output_container_client.get_blob_client(blob_name)
-                    
-                    # Read file content
-                    async with aiofiles.open(local_path, "rb") as data:
-                        file_content = await data.read()
-                        # Upload blob
-                        blob_client.upload_blob(file_content, overwrite=True)
-                        logger.info(f"Uploaded {local_path} to {blob_name}")
-                        upload_results.append(True)
+            # Check if scene.zip exists
+            if not os.path.exists(scene_zip_path):
+                logger.error(f"{Constants.SCENE_ZIP_FILENAME} not found in {target_folder}")
+                return False, None
             
-            return all(upload_results) if upload_results else False
+            # Define the new blob name with target_id
+            blob_name = Constants.SCENE_OUTPUT_FILENAME_TEMPLATE.format(target_id)
+            
+            blob_client = self.output_container_client.get_blob_client(blob_name)
+            
+            async with aiofiles.open(scene_zip_path, "rb") as data:
+                file_content = await data.read()
+                blob_client.upload_blob(file_content, overwrite=True)
+                logger.info(f"Uploaded {scene_zip_path} to {blob_name}")
+            
+            # Generate the URL to the uploaded blob
+            blob_url = f"{self.output_blob_client.url}/{self.output_container_name}/{blob_name}"
+            
+            return True, blob_url
             
         except Exception as e:
             logger.error(f"Error uploading to blob storage: {str(e)}", exc_info=True)
-            return False
-        
-    async def send_message_to_output_queue(self, target_folder: str) -> bool:
+            return False, None
+
+    async def send_message_to_output_queue(self, target_folder: str, blob_url: str) -> bool:
         """
-        Send a message to the output queue with information about the processed images.
+        Send a message to the output queue with information about the processed scene.zip.
         
         Args:
-            target_folder (str): Local directory containing processed images
+            target_folder (str): Local directory containing processed files
+            blob_url (str): URL to the uploaded scene zip file
             
         Returns:
             bool: Success flag
         """
         try:
-            #TODO: INTREGRATION 
             target_id = os.path.basename(target_folder)
             
-            processed_files = []
-            for root, _, files in os.walk(target_folder):
-                for file in files:
-                    local_path = os.path.join(root, file)
-                    relative_path = os.path.relpath(local_path, target_folder)
-                    blob_name = os.path.join(target_id, relative_path)
-                    processed_files.append(blob_name)
-            
             message = {
-                "TargetId": target_id,
-                "ProcessedFiles": processed_files,
-                "ProcessedAt": datetime.now().isoformat(),
-                "Status": "Completed"
+                Constants.KEY_TARGET_ID: target_id,
+                Constants.KEY_SCENE_URL: blob_url,
+                Constants.KEY_PROCESSED_AT: datetime.now().isoformat(),
+                Constants.KEY_STATUS: Constants.STATUS_COMPLETED
             }
             
             self.output_queue_client.send_message(json.dumps(message))
-            logger.info(f"Sent completion message for {target_id} to output queue")
+            logger.info(f"Sent completion message for {target_id} to output queue with scene URL")
             return True
             
         except Exception as e:
@@ -446,7 +439,7 @@ class AzureManager:
             logger.info(f"Starting to process messages from queue: {self.input_queue_name}")
 
             while True:
-                messages = self.input_queue_client.receive_messages(messages_per_page=10)
+                messages = self.input_queue_client.receive_messages(messages_per_page=Constants.QUEUE_MESSAGES_PER_PAGE)
                 message_processed = False
                 
                 for message in messages:
@@ -459,13 +452,13 @@ class AzureManager:
                     success, content = await self.process_job(message.content)
 
                     if success:
-                        upload_success = await self.upload_to_blob_storage(content)
+                        upload_success, blob_url = await self.upload_to_blob_storage(content)
                         if not upload_success:
-                            logger.error(f"Failed to upload processed files for message {message_id}")
+                            logger.error(f"Failed to upload {Constants.SCENE_ZIP_FILENAME} for message {message_id}")
                             self.retry_tracker[message_id] = current_retries + 1
                             continue
                         
-                        queue_success = await self.send_message_to_output_queue(content)
+                        queue_success = await self.send_message_to_output_queue(content, blob_url)
                         if not queue_success:
                             logger.error(f"Failed to send output message for {message_id}")
                             self.retry_tracker[message_id] = current_retries + 1
@@ -477,7 +470,6 @@ class AzureManager:
                         if message_id in self.retry_tracker:
                             del self.retry_tracker[message_id]
                     else:
-
                         self.retry_tracker[message_id] = current_retries + 1
                         
                         if self.retry_tracker[message_id] >= self.max_retries:
@@ -487,7 +479,6 @@ class AzureManager:
                                 self.retry_tracker[message_id]
                             )
 
-                            # Delete from original queue
                             self.input_queue_client.delete_message(message)
                             logger.info(f"Message {message_id} exceeded max retries. Moved to error queue.")
 
@@ -501,16 +492,14 @@ class AzureManager:
                             )
                             logger.info(f"Processing failed for message ID: {message_id}, will retry later (Attempt {self.retry_tracker[message_id]}/{self.max_retries})")
 
-                # Check if we should send end flag and exit
                 if not message_processed:
                     logger.info("No messages found in queue. Sending end flag.")
                     await self.send_end_flag()
                     break
                 
                 # Small pause between polling to avoid hammering the queue
-                await asyncio.sleep(1)
+                await asyncio.sleep(Constants.POLLING_INTERVAL_SECONDS)
 
         except Exception as e:
             logger.critical(f"Critical error in main process: {str(e)}", exc_info=True)
             await self.send_error("Main process", str(e), 0)
-
